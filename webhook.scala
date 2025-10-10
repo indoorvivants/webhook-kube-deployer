@@ -3,6 +3,7 @@
 //> using dep org.http4s::http4s-dsl::0.23.32
 //> using dep org.http4s::http4s-circe::0.23.32
 //> using dep com.outr::scribe-cats::3.17.0
+//> using dep io.circe::circe-optics::0.15.0
 
 import org.http4s.ember.server.*
 import org.http4s.*, dsl.io.*, implicits.*
@@ -72,7 +73,11 @@ object Webhook extends IOApp:
     val routes = HttpRoutes.of[IO]:
       case req @ POST -> Root / "webhook" =>
         req.asJson.flatMap: json =>
-          IO.println(json) *> Ok("got it")
+          import io.circe.optics.JsonPath.*
+          root.action.string.getOption(json) match
+            case Some("published") =>
+              IO.println(json) *> Ok("got it")
+            case _ => Ok()
 
     EmberServerBuilder
       .default[IO]
