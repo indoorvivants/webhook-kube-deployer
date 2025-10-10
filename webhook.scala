@@ -13,15 +13,15 @@ import com.monovore.decline.Argument
 import cats.data.*, cats.syntax.all.*
 import decline_derive.Env
 import org.typelevel.ci.CIString
+import org.http4s.circe.*
 
 extension [A, B](x: Argument[A])
   def mapValidated(f: A => ValidatedNel[String, B]): Argument[B] =
-    new Argument[B] {
+    new Argument[B]:
       override def read(string: String): ValidatedNel[String, B] =
         x.read(string).andThen(f)
 
       override def defaultMetavar: String = x.defaultMetavar
-    }
 
 given Argument[Port] =
   Argument.readInt.mapValidated(p =>
@@ -62,14 +62,17 @@ object Webhook extends IOApp:
                   Response(
                     Unauthorized.withReason("Invalid or missing webhook secret")
                   ).pure[IO]
+              end match
 
         case None =>
           app
+      end match
+    end protect
 
     val routes = HttpRoutes.of[IO]:
       case req @ POST -> Root / "webhook" =>
-        println(req)
-        Ok("got it")
+        req.asJson.flatMap: json =>
+          IO.println(json) *> Ok("got it")
 
     EmberServerBuilder
       .default[IO]
@@ -80,11 +83,13 @@ object Webhook extends IOApp:
       .evalTap(ser => IO.println(s"Server started on ${ser.baseUri}"))
       .useForever
       .as(ExitCode.Success)
+  end run
 
   def handleErrors(routes: HttpRoutes[IO]) =
     routes.orNotFound.onError { exc =>
       Kleisli(request => Log.error(s"Request failed: [$request]", exc))
     }
+end Webhook
 
 object Log:
   private lazy val io =

@@ -5,7 +5,7 @@ project/project
 .vscode
 *.class
 *.sjsr
-
+app
 project/.bloop
 
 .sbt
