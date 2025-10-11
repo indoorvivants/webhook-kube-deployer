@@ -1,10 +1,12 @@
 //> using dep com.indoorvivants::decline-derive::0.3.1
 //> using dep org.http4s::http4s-ember-server::0.23.32
+//> using dep org.http4s::http4s-ember-client::0.23.32
 //> using dep org.http4s::http4s-dsl::0.23.32
 //> using dep org.http4s::http4s-circe::0.23.32
 //> using dep com.outr::scribe-cats::3.17.0
 //> using dep io.circe::circe-jawn::0.14.15
 //> using dep io.circe::circe-optics::0.15.1
+//> using dep io.circe::circe-literal::0.14.15
 
 import org.http4s.ember.server.*
 import org.http4s.*, dsl.io.*, implicits.*
@@ -13,7 +15,7 @@ import decline_derive.CommandApplication
 import com.comcast.ip4s.*
 import com.monovore.decline.Argument
 import cats.data.*, cats.syntax.all.*
-import decline_derive.Env
+import decline_derive.*
 import org.typelevel.ci.CIString
 import org.http4s.circe.*
 import cats.effect.std.Supervisor
@@ -21,6 +23,11 @@ import concurrent.duration.*
 import java.security.MessageDigest
 import javax.crypto.spec.SecretKeySpec
 import javax.crypto.Mac
+import org.http4s.client.Client
+import java.time.format.DateTimeFormatter
+import java.time.Instant
+import java.time.ZoneOffset
+import org.http4s.ember.client.EmberClientBuilder
 
 extension [A, B](x: Argument[A])
   def mapValidated(f: A => ValidatedNel[String, B]): Argument[B] =
@@ -44,44 +51,26 @@ case class CLI(
     port: Option[Port],
     host: Option[Host],
     @Env("WEBHOOK_SECRET", "")
-    secret: Option[String]
+    secret: String,
+    @Env("KUBE_API", "")
+    @Name("kube-api")
+    kubeAPI: String,
+    @Name("delay")
+    delaySeconds: Option[FiniteDuration]
 ) derives CommandApplication
 
 object Webhook extends IOApp:
   override def run(args: List[String]): IO[ExitCode] =
     val cli = CommandApplication.parseOrExit[CLI](args, sys.env)
-    def protect(app: HttpRoutes[IO]): HttpRoutes[IO] =
-      val decoder = java.util.Base64.getDecoder()
-      cli.secret match
-        case Some(expectedSecret) =>
-          HttpRoutes.of[IO]:
-            case req =>
-              val decode = req.headers
-                .get(CIString("X-Github-Encoded-Secret"))
-                .map(_.head.value)
-                .map(decoder.decode(_))
-                .map(String(_))
-
-              decode match
-                case Some(value) if value == expectedSecret =>
-                  app(req).getOrElse(Response(NotFound))
-                case _ =>
-                  Response(
-                    Unauthorized.withReason("Invalid or missing webhook secret")
-                  ).pure[IO]
-              end match
-
-        case None =>
-          app
-      end match
-    end protect
 
     val labelsMapping = Map(
       "indoorvivants/mimalyzer"  -> List("mimalyzer", "mimalyzer-worker"),
       "indoorvivants/scala-boot" -> List("scala-boot"),
       "indoorvivants/sn-bindgen-web-server" -> List("sn-bindgen-web-server"),
       "indoorvivants/sn-bindgen-web-worker" -> List("sn-bindgen-web-worker"),
-      "indoorvivants/webhook-kube-deployer" -> List("webhook-kube-deployer")
+      "indoorvivants/webhook-kube-deployer" -> List(
+        "webhook-kube-deployer"
+      )
     )
 
     def hash(key: String, bytes: Array[Byte]) =
@@ -100,64 +89,77 @@ object Webhook extends IOApp:
       hexString.toString()
     end bytesToHex
 
-    def routes(sv: Supervisor[IO]) = HttpRoutes.of[IO]:
+    val delay = cli.delaySeconds.getOrElse(30.seconds)
+
+    def routes(sv: Supervisor[IO], api: MiniKubernetesAPI) = HttpRoutes.of[IO]:
       case req @ POST -> Root / "webhook" =>
         req.body.compile.toVector
           .map(_.toArray)
-          .flatMap: bytes =>
-            val digest = cli.secret.map(hash(_, bytes))
+          .flatMap(bytes =>
+            IO
+              .fromEither(io.circe.jawn.parseByteArray(bytes))
+              .map(bytes -> _)
+          )
+          .flatMap: (bytes, json) =>
+            val digest = hash(cli.secret, bytes)
             val header = req.headers
               .get(CIString("X-Hub-Signature-256"))
               .map(_.head.value)
 
-            (digest, header) match
-              case (Some(_), None) => IO(Response(Unauthorized))
-              case (Some(d), Some(h)) =>
-                if d == h.stripPrefix("sha256=") then
-                  IO.fromEither(io.circe.jawn.parseByteArray(bytes))
-                    .flatMap: json =>
+            header match
+              case None => IO(Response(Unauthorized))
+              case Some(h) =>
+                if digest == h.stripPrefix("sha256=") then
+                  import io.circe.optics.JsonPath.*
+                  root.action.string.getOption(json) match
+                    case Some("published") =>
+                      val namespace =
+                        for
+                          namespace <- root.`package`.namespace.string
+                            .getOption(json)
+                          name <- root.`package`.name.string.getOption(json)
+                          _ = Log.info(s"$namespace, $name")
+                        yield namespace + "/" + name
 
-                      import io.circe.optics.JsonPath.*
-                      root.action.string.getOption(json) match
-                        case Some("published") =>
-                          val schedule =
-                            (for
-                              namespace <- root.`package`.namespace.string
-                                .getOption(json)
-                              name <- root.`package`.name.string.getOption(json)
-                              _ = println(s"$namespace, $name")
-                            yield namespace + "/" + name,
-                            ).flatMap(labelsMapping.get) match
-                              case Some(labels) =>
-                                IO.println(
-                                  s"Scheduling a restart of ${labels.mkString(", ")} in 30 seconds"
-                                )
-                                  *> sv.supervise(
-                                    IO.println(
-                                      s"Restarting ${labels.mkString(", ")}"
-                                    ).delayBy(30.seconds)
-                                  )
-                              case None =>
-                                IO.println(
-                                  s"Unknown package ${root.`package`.json.getOption(json)}"
-                                ).as(Ok)
-                            end match
-                          end schedule
-
-                          schedule *> Ok()
-                        case _ => Ok()
+                      namespace.flatMap(labelsMapping.get) match
+                        case Some(labels) =>
+                          for
+                            _ <- Log.info(
+                              s"Scheduling a restart of ${labels.mkString(", ")} in ${delay.toSeconds} seconds"
+                            )
+                            _ <- sv.supervise(
+                              (Log
+                                .info(
+                                  s"Restarting ${labels.mkString(", ")}"
+                                ) *> api.restartLabels("default", labels))
+                                .delayBy(delay)
+                            )
+                            resp <- Ok()
+                          yield resp
+                        case None =>
+                          Log
+                            .warn(
+                              s"Unknown package ${root.`package`.json.getOption(json)}"
+                            ) *> Ok()
                       end match
+                    case _ => Ok()
+                  end match
                 else IO(Response(Unauthorized))
-              case (None, _) => InternalServerError()
             end match
 
+    val api = EmberClientBuilder
+      .default[IO]
+      .build
+      .map(cl => MiniKubernetesAPI(Uri.unsafeFromString(cli.kubeAPI), cl))
+
     Supervisor[IO]
-      .flatMap: sv =>
+      .product(api)
+      .flatMap: (sv, api) =>
         EmberServerBuilder
           .default[IO]
           .withHost(cli.host.getOrElse(host"0.0.0.0"))
           .withPort(cli.port.getOrElse(port"8080"))
-          .withHttpApp(handleErrors(routes(sv)))
+          .withHttpApp(handleErrors(routes(sv, api)))
           .build
           .evalTap(ser => IO.println(s"Server started on ${ser.baseUri}"))
       .useForever
@@ -192,3 +194,81 @@ object Log:
     error as errorUnsafe
   }
 end Log
+
+class MiniKubernetesAPI(url: Uri, client: Client[IO]):
+  private case class DeploymentsList(items: List[Deployment])
+      derives io.circe.Codec.AsObject
+  case class AppLabels(app: Option[String]) derives io.circe.Codec.AsObject
+  case class Metadata(name: String, labels: AppLabels)
+      derives io.circe.Codec.AsObject
+  case class Deployment(metadata: Metadata) derives io.circe.Codec.AsObject
+  def listDeployments(namespace: String): IO[List[Deployment]] =
+    import org.http4s.circe.CirceEntityDecoder.*
+    client
+      .expect[DeploymentsList](
+        url / "apis" / "apps" / "v1" / "namespaces" / namespace / "deployments"
+      )
+      .map(_.items)
+  end listDeployments
+
+  def restartLabels(namespace: String, labels: List[String]) =
+    listDeployments(namespace)
+      .flatTap(ds =>
+        Log.info(s"Found ${ds.map(_.metadata.name).mkString(", ")} deployments")
+      )
+      .map(
+        _.filter(d => labels.contains(d.metadata.labels.app.getOrElse("")))
+      )
+      .flatTap(ds =>
+        Log.info(
+          s"Found ${ds.map(_.metadata.name).mkString(", ")} deployments matching any of the labels: ${labels
+              .mkString(", ")}"
+        )
+      )
+      .flatMap(_.traverse: deployment =>
+        restartDeployment(namespace, deployment.metadata.name))
+
+  def restartDeployment(namespace: String, name: String) =
+    import io.circe.*, literal.*
+    val annotation = "kubectl.kubernetes.io/restartedAt"
+    val df         = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+    val newValue = Instant
+      .now()
+      .atOffset(ZoneOffset.UTC)
+      .format(df)
+    val patch =
+      json"""
+        {
+          "spec": {
+            "template": {
+              "metadata": {
+                "annotations": {
+                  $annotation: $newValue
+                }
+              }
+            }
+          }
+        }
+      """
+
+    import org.http4s.headers.`Content-Type`
+    val request = Request[IO]()
+      .withMethod(Method.PATCH)
+      .withEntity(patch.noSpaces)
+      .withContentType(
+        `Content-Type`(
+          MediaType.unsafeParse("application/strategic-merge-patch+json")
+        )
+      )
+      .withUri(
+        url / "apis" / "apps" / "v1" / "namespaces" / namespace / "deployments" / name
+      )
+
+    client
+      .run(
+        request
+      )
+      .use(resp => resp.bodyText.compile.string.flatMap(b => Log.info(b)))
+  end restartDeployment
+
+end MiniKubernetesAPI
