@@ -92,6 +92,16 @@ object Webhook extends IOApp:
     val delay = cli.delaySeconds.getOrElse(30.seconds)
 
     def routes(sv: Supervisor[IO], api: MiniKubernetesAPI) = HttpRoutes.of[IO]:
+      case req @ GET -> Root / "health" =>
+        api
+          .listDeployments("default")
+          .flatMap: ds =>
+            Ok(
+              io.circe.Json.obj(
+                "status"      -> io.circe.Json.fromString("ok"),
+                "deployments" -> io.circe.Json.fromInt(ds.size)
+              )
+            )
       case req @ POST -> Root / "webhook" =>
         req.body.compile.toVector
           .map(_.toArray)
