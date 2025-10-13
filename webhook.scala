@@ -89,7 +89,7 @@ object Webhook extends IOApp:
       hexString.toString()
     end bytesToHex
 
-    val delay = cli.delaySeconds.getOrElse(30.seconds)
+    val delay = cli.delaySeconds.getOrElse(10.seconds)
 
     def routes(sv: Supervisor[IO], api: MiniKubernetesAPI) = HttpRoutes.of[IO]:
       case req @ GET -> Root / "health" =>
@@ -206,12 +206,7 @@ object Log:
 end Log
 
 class MiniKubernetesAPI(url: Uri, client: Client[IO]):
-  private case class DeploymentsList(items: List[Deployment])
-      derives io.circe.Codec.AsObject
-  case class AppLabels(app: Option[String]) derives io.circe.Codec.AsObject
-  case class Metadata(name: String, labels: AppLabels)
-      derives io.circe.Codec.AsObject
-  case class Deployment(metadata: Metadata) derives io.circe.Codec.AsObject
+  import MiniKubernetesAPI.*
   def listDeployments(namespace: String): IO[List[Deployment]] =
     import org.http4s.circe.CirceEntityDecoder.*
     client
@@ -281,4 +276,13 @@ class MiniKubernetesAPI(url: Uri, client: Client[IO]):
       .use(resp => resp.bodyText.compile.string.flatMap(b => Log.info(b)))
   end restartDeployment
 
+end MiniKubernetesAPI
+
+object MiniKubernetesAPI:
+  private case class DeploymentsList(items: List[Deployment])
+      derives io.circe.Codec.AsObject
+  case class AppLabels(app: Option[String]) derives io.circe.Codec.AsObject
+  case class Metadata(name: String, labels: AppLabels)
+      derives io.circe.Codec.AsObject
+  case class Deployment(metadata: Metadata) derives io.circe.Codec.AsObject
 end MiniKubernetesAPI
