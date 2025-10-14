@@ -10,7 +10,7 @@ RUN apt update && apt install -y curl && \
     echo '@main def hello = println(42)' | scala-cli run _ -S 3.7.3 --server=false
 
 WORKDIR /workdir
-COPY webhook.scala .
+COPY . .
 RUN scala-cli package . -f -o ./app --assembly --server=false
 
 FROM eclipse-temurin:24
