@@ -47,7 +47,7 @@ class Restarter(
             .get(CIString("X-Hub-Signature-256"))
             .map(_.head.value)
 
-          if !header.contains(digest) then BadRequest("invalid signature")
+          if !header.contains("sha256=" + digest) then BadRequest("invalid signature")
           else
             IO.fromEither(json.as[PublishedEvent])
               .flatMap:
