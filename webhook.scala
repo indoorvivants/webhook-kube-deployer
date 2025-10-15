@@ -2,7 +2,6 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.std.Supervisor
 import cats.syntax.all.*
-import com.comcast.ip4s.*
 import decline_derive.CommandApplication
 import org.http4s.*
 import org.http4s.ember.client.EmberClientBuilder
@@ -33,8 +32,8 @@ object Webhook extends IOApp:
       .flatMap: (sv, api) =>
         EmberServerBuilder
           .default[IO]
-          .withHost(cli.host.getOrElse(host"0.0.0.0"))
-          .withPort(cli.port.getOrElse(port"8080"))
+          .withHost(cli.host)
+          .withPort(cli.port)
           .withHttpApp(
             handleErrors(Restarter(sv, api, cli, labelsMapping).routes)
           )
@@ -49,4 +48,3 @@ object Webhook extends IOApp:
       Kleisli(request => Log.error(s"Request failed: [$request]", exc))
     }
 end Webhook
-

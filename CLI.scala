@@ -7,15 +7,15 @@ import decline_derive.{CommandApplication, *}
 import concurrent.duration.*
 
 case class CLI(
-    port: Option[Port],
-    host: Option[Host],
+    port: Port = port"8080",
+    host: Host = host"localhost",
     @Env("WEBHOOK_SECRET", "")
     secret: String,
     @Env("KUBE_API", "")
     @Name("kube-api")
-    kubeAPI: String,
+    kubeAPI: String = "http://localhost:8001",
     @Name("delay")
-    delaySeconds: Option[FiniteDuration]
+    delay: FiniteDuration = 10.seconds
 ) derives CommandApplication
 
 extension [A, B](x: Argument[A])
@@ -35,4 +35,3 @@ given Argument[Host] =
   Argument.readString.mapValidated(p =>
     Host.fromString(p).toRight(s"Invalid host $p").toValidatedNel
   )
-

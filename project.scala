@@ -1,7 +1,7 @@
 // Main
 //> using options -Wunused:all
 
-//> using dependency com.indoorvivants::decline-derive::0.3.1
+//> using dependency com.indoorvivants::decline-derive::0.3.2
 //> using dependency com.outr::scribe-cats::3.17.0
 //> using dependency io.circe::circe-jawn::0.14.15
 //> using dependency io.circe::circe-literal::0.14.15

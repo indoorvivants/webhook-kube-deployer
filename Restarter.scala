@@ -7,7 +7,6 @@ import org.http4s.circe.*
 import org.http4s.dsl.io.*
 import org.typelevel.ci.CIString
 
-import concurrent.duration.*
 import io.circe.DecodingFailure
 
 case class Package(name: String, namespace: String)
@@ -47,7 +46,8 @@ class Restarter(
             .get(CIString("X-Hub-Signature-256"))
             .map(_.head.value)
 
-          if !header.contains("sha256=" + digest) then BadRequest("invalid signature")
+          if !header.contains("sha256=" + digest) then
+            BadRequest("invalid signature")
           else
             IO.fromEither(json.as[PublishedEvent])
               .flatMap:
@@ -66,14 +66,14 @@ class Restarter(
       case Some(labels) =>
         for
           _ <- info(
-            s"Scheduling a restart of ${labels.mkString(", ")} in ${delay.toSeconds} seconds"
+            s"Scheduling a restart of ${labels.mkString(", ")} in ${cli.delay.toSeconds} seconds"
           )
           publishing =
             info(s"Restarting ${labels.mkString(", ")}") *>
               api
                 .restartLabels("default", labels)
 
-          _    <- sv.supervise(publishing.delayBy(delay))
+          _    <- sv.supervise(publishing.delayBy(cli.delay))
           resp <- Ok()
         yield resp
       case None =>
@@ -81,5 +81,4 @@ class Restarter(
     end match
   end handlePackage
 
-  val delay = cli.delaySeconds.getOrElse(10.seconds)
 end Restarter

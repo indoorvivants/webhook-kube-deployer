@@ -6,9 +6,11 @@ import org.http4s.client.Client
 
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, ZoneOffset}
+import Log.*
+import MiniKubernetesAPI.*
 
 class MiniKubernetesAPI(url: Uri, client: Client[IO]):
-  import MiniKubernetesAPI.*
+
   def listDeployments(namespace: String): IO[List[Deployment]] =
     import org.http4s.circe.CirceEntityDecoder.*
     client
@@ -21,13 +23,13 @@ class MiniKubernetesAPI(url: Uri, client: Client[IO]):
   def restartLabels(namespace: String, labels: List[String]) =
     listDeployments(namespace)
       .flatTap(ds =>
-        Log.info(s"Found ${ds.map(_.metadata.name).mkString(", ")} deployments")
+        info(s"Found ${ds.map(_.metadata.name).mkString(", ")} deployments")
       )
       .map(
         _.filter(d => labels.contains(d.metadata.labels.app.getOrElse("")))
       )
       .flatTap(ds =>
-        Log.info(
+        info(
           s"Found ${ds.map(_.metadata.name).mkString(", ")} deployments matching any of the labels: ${labels
               .mkString(", ")}"
         )
@@ -59,6 +61,7 @@ class MiniKubernetesAPI(url: Uri, client: Client[IO]):
       """
 
     import org.http4s.headers.`Content-Type`
+
     val request = Request[IO]()
       .withMethod(Method.PATCH)
       .withEntity(patch.noSpaces)
@@ -75,7 +78,7 @@ class MiniKubernetesAPI(url: Uri, client: Client[IO]):
       .run(
         request
       )
-      .use(resp => resp.bodyText.compile.string.flatMap(b => Log.info(b)))
+      .use(resp => resp.bodyText.compile.string.flatMap(b => info(b)))
   end restartDeployment
 end MiniKubernetesAPI
 
@@ -87,4 +90,3 @@ object MiniKubernetesAPI:
       derives io.circe.Codec.AsObject
   case class Deployment(metadata: Metadata) derives io.circe.Codec.AsObject
 end MiniKubernetesAPI
-
