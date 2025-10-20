@@ -75,15 +75,13 @@ class MiniKubernetesAPI(url: Uri, client: Client[IO]):
       )
 
     client
-      .run(
-        request
-      )
-      .use(resp => resp.bodyText.compile.string.flatMap(b => info(b)))
+      .run(request)
+      .use(resp => resp.bodyText.compile.string.flatMap(Log.info(_)))
   end restartDeployment
 end MiniKubernetesAPI
 
 object MiniKubernetesAPI:
-  private case class DeploymentsList(items: List[Deployment])
+  case class DeploymentsList(items: List[Deployment])
       derives io.circe.Codec.AsObject
   case class AppLabels(app: Option[String]) derives io.circe.Codec.AsObject
   case class Metadata(name: String, labels: AppLabels)

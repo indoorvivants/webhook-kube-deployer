@@ -33,7 +33,11 @@ class Restarter(
             )
           )
     case req @ POST -> Root / "webhook" =>
-      req.body.compile.toVector
+      req.body
+        // Limit payload to 50KB
+        .take(50 * 1024)
+        .compile
+        .toVector
         .map(_.toArray)
         .flatMap(bytes =>
           IO
